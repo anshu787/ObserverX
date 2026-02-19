@@ -1,4 +1,4 @@
-# 🚀 ObserveX — AI-Powered Cloud Monitoring & Observability Platform
+# 🚀 ObserveX — AI-Powered Cloud Monitoring & Observability Platform Loop Hackathon Prototype
 
 > **ObserveX — The AI Reliability Engineer that explains incidents before users notice them.**
 
