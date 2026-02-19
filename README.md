@@ -88,7 +88,6 @@ Architecture Type:
 - React Flow (service maps)
 
 ### Backend
-- Lovable Cloud (Supabase)
   - PostgreSQL Database
   - Edge Functions
   - Realtime Subscriptions
