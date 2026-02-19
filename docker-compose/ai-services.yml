@@ -1,0 +1,187 @@
+services:
+  # Ollama LLM Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    hostname: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '4.0'
+        reservations:
+          memory: 4G
+          cpus: '2.0'
+
+  # ML Inference API
+  ml-inference:
+    build:
+      context: ../ml_training
+      dockerfile: Dockerfile
+    container_name: ml-inference
+    hostname: ml-inference
+    restart: unless-stopped
+    ports:
+      - "8500:8000"
+    volumes:
+      - ../models:/app/models:ro
+    environment:
+      - MODEL_PATH=/app/models
+      - LOG_LEVEL=INFO
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+
+  # Alert Triage Service (existing)
+  alert-triage:
+    build:
+      context: ../services/alert-triage
+      dockerfile: Dockerfile
+    container_name: alert-triage
+    hostname: alert-triage
+    restart: unless-stopped
+    ports:
+      - "8100:8000"
+    environment:
+      - TRIAGE_OLLAMA_HOST=http://ollama:11434
+      - TRIAGE_PRIMARY_MODEL=llama3.2:3b
+      - TRIAGE_ML_API_URL=http://ml-inference:8000
+      - TRIAGE_RAG_SERVICE_URL=http://rag-service:8000
+    networks:
+      - ai-network
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ml-inference:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # RAG Service (existing)
+  rag-service:
+    build:
+      context: ../services/rag-service
+      dockerfile: Dockerfile
+    container_name: rag-service
+    hostname: rag-service
+    restart: unless-stopped
+    ports:
+      - "8300:8000"
+    environment:
+      - RAG_CHROMADB_HOST=chromadb
+      - RAG_CHROMADB_PORT=8000
+    networks:
+      - ai-network
+    depends_on:
+      - chromadb
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Wazuh Integration Service
+  wazuh-integration:
+    build:
+      context: ../services/wazuh-integration
+      dockerfile: Dockerfile
+    container_name: wazuh-integration
+    hostname: wazuh-integration
+    restart: unless-stopped
+    ports:
+      - "8002:8002"
+    environment:
+      - WAZUH_MANAGER_URL=https://wazuh-manager:55000
+      - WAZUH_USERNAME=wazuh-wui
+      - WAZUH_PASSWORD=${API_PASSWORD}
+      - MIN_SEVERITY=7
+      - RAG_SEVERITY_THRESHOLD=8
+      - ALERT_TRIAGE_URL=http://alert-triage:8000
+      - RAG_SERVICE_URL=http://rag-service:8000
+      - API_PASSWORD=${API_PASSWORD}
+    networks:
+      - ai-network
+      - siem-backend
+    depends_on:
+      alert-triage:
+        condition: service_healthy
+      rag-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # ChromaDB
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    hostname: chromadb
+    restart: unless-stopped
+    ports:
+      - "8200:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    networks:
+      - ai-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/api/v2/heartbeat || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  ai-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.35.0.0/24
+  siem-backend:
+    external: true
+    name: docker-compose_siem-backend
+
+volumes:
+  ollama-data:
+    driver: local
+  chromadb-data:
+    driver: local
